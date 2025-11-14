@@ -1,0 +1,65 @@
+#include "util/Logger.h"
+#include "core/rng/SystemRng.h"
+#include "core/math/GameMathConfig.h"
+#include "core/math/MathEngine.h"
+#include "persistence/InMemorySessionRepository.h"
+#include "persistence/InMemoryRoundRepository.h"
+#include "integration/DummyAggregatorClient.h"
+#include "session/SessionManager.h"
+#include "session/RoundService.h"
+#include "api/HttpServer.h"
+#include "api/SessionController.h"
+#include "api/GameController.h"
+#include <filesystem>
+
+int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
+    try {
+      std::filesystem::path exePath = std::filesystem::canonical(argv[0]);
+      std::filesystem::path baseDir = exePath.parent_path(); // папка с бинарём
+
+      // если storage лежит рядом с бинарём:
+      // auto storageDir = baseDir / "storage";
+
+      // если storage лежит на уровень выше (как у тебя сейчас):
+      auto storageDir = baseDir.parent_path() / "storage";
+
+      std::string winRangesPath = (storageDir / "win_ranges.json").string();
+      std::string probabilitiesPath = (storageDir / "rtp_probabilities.json").string();
+
+        GameMathConfig cfg = GameMathConfig::LoadFromFiles(winRangesPath, probabilitiesPath);
+        SystemRng rng;
+        MathEngine math(cfg, rng);
+
+        InMemorySessionRepository sessionRepo;
+        InMemoryRoundRepository roundRepo;
+        DummyAggregatorClient aggregator;
+        SessionManager sessionManager(sessionRepo);
+        RoundService roundService(math, roundRepo, sessionManager, aggregator);
+
+        HttpServer server;
+        SessionController sessionController(sessionManager, aggregator, roundService);
+        GameController gameController(roundService, sessionManager);
+
+        server.RegisterHandler("/session/start",
+            [&sessionController](const std::string& body) {
+                return sessionController.StartSession(body);
+            });
+
+        server.RegisterHandler("/session/end",
+            [&sessionController](const std::string& body) {
+                return sessionController.EndSession(body);
+            });
+
+        server.RegisterHandler("/game/play",
+            [&gameController](const std::string& body) {
+                return gameController.Play(body);
+            });
+
+        server.Start(8080);
+
+        return 0;
+    } catch (const std::exception& ex) {
+        util::Logger::Error(std::string("Fatal error: ") + ex.what());
+        return 1;
+    }
+}
