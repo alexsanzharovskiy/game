@@ -4,6 +4,7 @@
 #include "integration/IAggregatorClient.h"
 #include "session/SessionManager.h"
 #include <optional>
+#include <string>
 
 class RoundService {
 public:
@@ -12,7 +13,17 @@ public:
                  SessionManager& sessionManager,
                  IAggregatorClient& aggregator);
 
-    RoundResult PlayRound(std::uint64_t sessionInternalId, double betAmount);
+    // Шаг 1 — /game/play: BET на агрегаторе + генерация раунда, БЕЗ WIN
+    RoundResult PlayRound(std::uint64_t sessionInternalId,
+                          double betAmount,
+                          const std::string& currency,
+                          const std::string& reelsJson = {});
+
+    // Шаг 2 — /game/finish: WIN на агрегаторе по уже существующему round_id
+    RoundResult FinishRound(std::uint64_t sessionInternalId,
+                            const std::string& roundId);
+
+    // Автовосстановление незавершённого раунда при session_start
     std::optional<RoundResult> ResumeUnfinishedRound(std::uint64_t sessionInternalId);
 
 private:
@@ -22,4 +33,5 @@ private:
     IAggregatorClient& aggregator_;
 
     std::string GenerateId(const std::string& prefix, std::uint64_t sessionId);
+    RoundResult DoFinishRound(std::uint64_t sessionInternalId, RoundResult round);
 };

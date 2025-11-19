@@ -50,9 +50,16 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
                 return sessionController.EndSession(body);
             });
 
+        // 1) /game/play — BET + генерация раунда, без WIN
         server.RegisterHandler("/game/play",
             [&gameController](const std::string& body) {
                 return gameController.Play(body);
+            });
+
+        // 2) /game/finish — WIN + финализация раунда
+        server.RegisterHandler("/game/finish",
+            [&gameController](const std::string& body) {
+                return gameController.Finish(body);
             });
 
         server.Start(8080);

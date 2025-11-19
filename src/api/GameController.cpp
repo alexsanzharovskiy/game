@@ -2,7 +2,7 @@
 #include "util/Logger.h"
 #include <sstream>
 
-static std::string ExtractFieldSimple(const std::string& json, const std::string& field) {
+static std::string ExtractField(const std::string& json, const std::string& field) {
     std::string key = "\"" + field + "\"";
     auto pos = json.find(key);
     if (pos == std::string::npos) return "";
@@ -18,34 +18,107 @@ static std::string ExtractFieldSimple(const std::string& json, const std::string
     return value;
 }
 
+// 1) /game/play — BET + генерация раунда, без WIN
 std::string GameController::Play(const std::string& bodyJson) {
     try {
-        std::string sidStr = ExtractFieldSimple(bodyJson, "session_id");
-        std::string betStr = ExtractFieldSimple(bodyJson, "amount");
-        if (sidStr.empty() || betStr.empty()) {
-            return R"({"status":"ERROR","error_code":"SESSION_ID_AND_AMOUNT_REQUIRED"})";
+        std::string sidStr   = ExtractField(bodyJson, "session_id");
+        std::string playerId = ExtractField(bodyJson, "player_id");
+        std::string amountStr= ExtractField(bodyJson, "amount");
+        std::string currency = ExtractField(bodyJson, "currency");
+
+        if (sidStr.empty() || playerId.empty() || amountStr.empty()) {
+            return R"({"status":"ERROR","error_code":"SESSION_ID_PLAYER_ID_AMOUNT_REQUIRED"})";
         }
+        if (currency.empty()) {
+            currency = "USD"; // дефолт, если не передали
+        }
+
         std::uint64_t sid = std::stoull(sidStr);
-        double bet = std::stod(betStr);
+        double amount = std::stod(amountStr);
 
-        RoundResult result = roundService_.PlayRound(sid, bet);
-
+        // Можно (опционально) проверить, что playerId совпадает с тем, что в сессии
         auto sOpt = sessionManager_.GetSession(sid);
-        double balance = sOpt ? sOpt->balance : 0.0;
+        if (!sOpt) {
+            return R"({"status":"ERROR","error_code":"SESSION_NOT_FOUND"})";
+        }
+        if (sOpt->playerId != playerId) {
+            return R"({"status":"ERROR","error_code":"PLAYER_ID_MISMATCH"})";
+        }
+
+        RoundResult result = roundService_.PlayRound(sid, amount, currency);
+
+        // Баланс пока без учёта WIN — только после WIN/finish
+        auto sessAfter = sessionManager_.GetSession(sid);
+        double balance = sessAfter ? sessAfter->balance : 0.0;
 
         std::ostringstream out;
         out << "{"
             << "\"status\":\"OK\","
-            << "\"round\":{"
-            <<   "\"round_id\":\"" << result.roundId << "\","
-            <<   "\"bet_amount\":" << result.betAmount << ","
-            <<   "\"win_amount\":" << result.winAmount << ","
-            <<   "\"balance\":" << balance
-            << "}"
+            << "\"session_id\":" << sid << ","
+            << "\"player_id\":\"" << playerId << "\","
+            << "\"round_id\":\"" << result.roundId << "\","
+            << "\"bet_amount\":" << result.betAmount << ","
+            << "\"win_amount\":" << result.winAmount << ","
+            << "\"currency\":\"" << result.currency << "\","
+            << "\"balance\":" << balance
             << "}";
         return out.str();
     } catch (const std::exception& ex) {
         util::Logger::Error(std::string("Play error: ") + ex.what());
+        std::ostringstream out;
+        out << "{"
+            << "\"status\":\"ERROR\","
+            << "\"error_code\":\"" << ex.what() << "\""
+            << "}";
+        return out.str();
+    }
+}
+
+// 2) /game/finish — WIN + финализация раунда
+std::string GameController::Finish(const std::string& bodyJson) {
+    try {
+        std::string sidStr   = ExtractField(bodyJson, "session_id");
+        std::string playerId = ExtractField(bodyJson, "player_id");
+        std::string roundId  = ExtractField(bodyJson, "round_id");
+
+        if (sidStr.empty() || playerId.empty() || roundId.empty()) {
+            return R"({"status":"ERROR","error_code":"SESSION_ID_PLAYER_ID_ROUND_ID_REQUIRED"})";
+        }
+
+        std::uint64_t sid = std::stoull(sidStr);
+
+        auto sOpt = sessionManager_.GetSession(sid);
+        if (!sOpt) {
+            return R"({"status":"ERROR","error_code":"SESSION_NOT_FOUND"})";
+        }
+        if (sOpt->playerId != playerId) {
+            return R"({"status":"ERROR","error_code":"PLAYER_ID_MISMATCH"})";
+        }
+
+        RoundResult result = roundService_.FinishRound(sid, roundId);
+
+        auto sessAfter = sessionManager_.GetSession(sid);
+        double balance = sessAfter ? sessAfter->balance : 0.0;
+
+        std::ostringstream out;
+        out << "{"
+            << "\"status\":\"OK\","
+            << "\"session_id\":" << sid << ","
+            << "\"player_id\":\"" << playerId << "\","
+            << "\"round_id\":\"" << result.roundId << "\","
+            << "\"bet_amount\":" << result.betAmount << ","
+            << "\"win_amount\":" << result.winAmount << ","
+            << "\"currency\":\"" << result.currency << "\","
+            << "\"balance\":" << balance << ","
+            << "\"round_status\":\""
+            << (result.status == RoundStatus::COMPLETED ? "COMPLETED" :
+                result.status == RoundStatus::WIN_PENDING ? "WIN_PENDING" :
+                result.status == RoundStatus::BET_CONFIRMED ? "BET_CONFIRMED" : "CANCELLED")
+            << "\""
+            << "}";
+        return out.str();
+    } catch (const std::exception& ex) {
+        util::Logger::Error(std::string("Finish error: ") + ex.what());
         std::ostringstream out;
         out << "{"
             << "\"status\":\"ERROR\","
