@@ -9,6 +9,7 @@ public:
     std::optional<RoundResult> FindLastBySession(std::uint64_t sessionId) override;
     void Update(const RoundResult& result) override;
     std::optional<RoundResult> FindUnfinishedBySession(std::uint64_t sessionId) override;
+    std::optional<RoundResult> FindUnfinishedByPlayer(const std::string& playerId) override; // 🔥
 
 private:
     std::unordered_map<std::string, RoundResult> rounds_;

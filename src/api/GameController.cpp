@@ -77,33 +77,24 @@ std::string GameController::Play(const std::string& bodyJson) {
 // 2) /game/finish — WIN + финализация раунда
 std::string GameController::Finish(const std::string& bodyJson) {
     try {
-        std::string sidStr   = ExtractField(bodyJson, "session_id");
         std::string playerId = ExtractField(bodyJson, "player_id");
         std::string roundId  = ExtractField(bodyJson, "round_id");
 
-        if (sidStr.empty() || playerId.empty() || roundId.empty()) {
-            return R"({"status":"ERROR","error_code":"SESSION_ID_PLAYER_ID_ROUND_ID_REQUIRED"})";
+        if (playerId.empty() || roundId.empty()) {
+            return R"({"status":"ERROR","error_code":"PLAYER_ID_AND_ROUND_ID_REQUIRED"})";
         }
 
-        std::uint64_t sid = std::stoull(sidStr);
+        // Завершаем раунд чисто по player_id + round_id
+        RoundResult result = roundService_.FinishRound(playerId, roundId);
 
-        auto sOpt = sessionManager_.GetSession(sid);
-        if (!sOpt) {
-            return R"({"status":"ERROR","error_code":"SESSION_NOT_FOUND"})";
-        }
-        if (sOpt->playerId != playerId) {
-            return R"({"status":"ERROR","error_code":"PLAYER_ID_MISMATCH"})";
-        }
-
-        RoundResult result = roundService_.FinishRound(sid, roundId);
-
-        auto sessAfter = sessionManager_.GetSession(sid);
-        double balance = sessAfter ? sessAfter->balance : 0.0;
+        // После WIN баланс обновился в той сессии, где был BET.
+        // Найдём актуальный баланс по internal sessionId, который хранится в round.sessionId.
+        auto sessOpt = sessionManager_.GetSession(result.sessionId);
+        double balance = sessOpt ? sessOpt->balance : 0.0;
 
         std::ostringstream out;
         out << "{"
             << "\"status\":\"OK\","
-            << "\"session_id\":" << sid << ","
             << "\"player_id\":\"" << playerId << "\","
             << "\"round_id\":\"" << result.roundId << "\","
             << "\"bet_amount\":" << result.betAmount << ","
@@ -127,3 +118,5 @@ std::string GameController::Finish(const std::string& bodyJson) {
         return out.str();
     }
 }
+
+

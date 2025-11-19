@@ -140,24 +140,31 @@ RoundResult RoundService::DoFinishRound(std::uint64_t sessionInternalId, RoundRe
 }
 
 // Шаг 2: /game/finish
-RoundResult RoundService::FinishRound(std::uint64_t sessionInternalId,
+RoundResult RoundService::FinishRound(const std::string& playerId,
                                       const std::string& roundId) {
     auto existing = roundRepo_.FindById(roundId);
     if (!existing) {
         throw std::runtime_error("Round not found");
     }
-    if (existing->sessionId != sessionInternalId) {
-        throw std::runtime_error("Round does not belong to this session");
-    }
 
     RoundResult round = *existing;
+
+    // Проверяем, что раунд реально принадлежит этому игроку
+    if (round.playerId != playerId) {
+        throw std::runtime_error("Round does not belong to this player");
+    }
+
+    // Если уже COMPLETED или CANCELLED — ничего делать не нужно
     if (round.status == RoundStatus::COMPLETED || round.status == RoundStatus::CANCELLED) {
-        // Уже завершён — просто возвращаем
         return round;
     }
 
+    // Внутри RoundResult.sessionId лежит internalId сессии, в которой был BET
+    std::uint64_t sessionInternalId = round.sessionId;
+
     return DoFinishRound(sessionInternalId, round);
 }
+
 
 // Автовосстановление при session_start
 std::optional<RoundResult> RoundService::ResumeUnfinishedRound(std::uint64_t sessionInternalId) {
@@ -173,3 +180,8 @@ std::optional<RoundResult> RoundService::ResumeUnfinishedRound(std::uint64_t ses
         return round; // возвращаем как есть
     }
 }
+
+std::optional<RoundResult> RoundService::FindUnfinishedRoundForPlayer(const std::string& playerId) {
+    return roundRepo_.FindUnfinishedByPlayer(playerId);
+}
+

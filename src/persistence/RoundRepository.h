@@ -12,4 +12,7 @@ public:
     virtual std::optional<RoundResult> FindLastBySession(std::uint64_t sessionId) = 0;
     virtual void Update(const RoundResult& result) = 0;
     virtual std::optional<RoundResult> FindUnfinishedBySession(std::uint64_t sessionId) = 0;
+
+    // 🔥 новое: поиск незавершённого раунда по player_id
+    virtual std::optional<RoundResult> FindUnfinishedByPlayer(const std::string& playerId) = 0;
 };

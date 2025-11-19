@@ -20,11 +20,14 @@ public:
                           const std::string& reelsJson = {});
 
     // Шаг 2 — /game/finish: WIN на агрегаторе по уже существующему round_id
-    RoundResult FinishRound(std::uint64_t sessionInternalId,
-                            const std::string& roundId);
+RoundResult FinishRound(const std::string& playerId,
+                        const std::string& roundId);
 
     // Автовосстановление незавершённого раунда при session_start
     std::optional<RoundResult> ResumeUnfinishedRound(std::uint64_t sessionInternalId);
+
+    std::optional<RoundResult> FindUnfinishedRoundForPlayer(const std::string& playerId);
+
 
 private:
     MathEngine& mathEngine_;

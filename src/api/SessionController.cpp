@@ -20,18 +20,22 @@ static std::string ExtractField(const std::string& json, const std::string& fiel
 
 std::string SessionController::StartSession(const std::string& bodyJson) {
     try {
-        std::string token = ExtractField(bodyJson, "token");
+        std::string token    = ExtractField(bodyJson, "token");
         std::string playerId = ExtractField(bodyJson, "player_id");
         if (token.empty() || playerId.empty()) {
             return R"({"status":"ERROR","error_code":"TOKEN_AND_PLAYER_ID_REQUIRED"})";
         }
+
         auto resp = aggregator_.StartSession(token);
         if (!resp) {
             return R"({"status":"ERROR","error_code":"FAILED_TO_START_SESSION"})";
         }
+
+        // создаём НОВУЮ сессию для игрока
         Session s = sessionManager_.StartSession(token, playerId, resp->sessionId, resp->balance);
 
-        auto resumed = roundService_.ResumeUnfinishedRound(s.internalId);
+        // ищем незавершённый раунд по player_id
+        auto unfinished = roundService_.FindUnfinishedRoundForPlayer(playerId);
 
         std::ostringstream out;
         out << "{"
@@ -39,16 +43,18 @@ std::string SessionController::StartSession(const std::string& bodyJson) {
             << "\"session_id\":" << s.internalId << ","
             << "\"external_session_id\":\"" << s.externalSessionId << "\","
             << "\"balance\":" << s.balance;
-        if (resumed) {
+
+        if (unfinished) {
             out << ",\"resumed_round\":{"
-                << "\"round_id\":\"" << resumed->roundId << "\","
-                << "\"bet_amount\":" << resumed->betAmount << ","
-                << "\"win_amount\":" << resumed->winAmount << ","
-                << "\"status\":\"COMPLETED\""
+                << "\"round_id\":\"" << unfinished->roundId << "\","
+                << "\"bet_amount\":" << unfinished->betAmount << ","
+                << "\"win_amount\":" << unfinished->winAmount << ","
+                << "\"currency\":\"" << unfinished->currency << "\""
                 << "}";
         } else {
             out << ",\"resumed_round\":null";
         }
+
         out << "}";
         return out.str();
     } catch (const std::exception& ex) {
@@ -56,6 +62,8 @@ std::string SessionController::StartSession(const std::string& bodyJson) {
         return R"({"status":"ERROR","error_code":"INTERNAL_ERROR"})";
     }
 }
+
+
 
 std::string SessionController::EndSession(const std::string& bodyJson) {
     try {

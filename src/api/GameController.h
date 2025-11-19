@@ -10,13 +10,14 @@ public:
         : roundService_(roundService),
           sessionManager_(sessionManager) {}
 
-    // POST /game/play  — {"session_id":1,"player_id":"p1","amount":10,"currency":"USD"}
+    // /game/play — {"session_id":1,"player_id":"p1","amount":10,"currency":"USD"}
     std::string Play(const std::string& bodyJson);
 
-    // POST /game/finish — {"session_id":1,"player_id":"p1","round_id":"round_1_1"}
+    // /game/finish — {"player_id":"p1","round_id":"round_1_1"}
     std::string Finish(const std::string& bodyJson);
 
 private:
     RoundService& roundService_;
     SessionManager& sessionManager_;
 };
+
