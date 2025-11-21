@@ -10,10 +10,13 @@ public:
     Session StartSession(const std::string& token,
                          const std::string& playerId,
                          const std::string& externalSessionId,
+                         std::int64_t operatorId,
                          double initialBalance);
 
     std::optional<Session> GetSession(std::uint64_t internalId);
     std::optional<Session> GetByExternalSessionId(const std::string& externalId);
+    std::optional<Session> GetActiveByPlayerAndOperator(const std::string& playerId,
+                                                        std::int64_t operatorId);
 
     void UpdateBalance(std::uint64_t internalId, double newBalance);
     void SetLastRound(std::uint64_t internalId, const std::string& roundId);

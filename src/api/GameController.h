@@ -20,4 +20,3 @@ private:
     RoundService& roundService_;
     SessionManager& sessionManager_;
 };
-

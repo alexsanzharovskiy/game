@@ -4,12 +4,14 @@
 #include "core/math/MathEngine.h"
 #include "persistence/InMemorySessionRepository.h"
 #include "persistence/InMemoryRoundRepository.h"
+#include "persistence/InMemoryTransactionRepository.h"
 #include "integration/DummyAggregatorClient.h"
 #include "session/SessionManager.h"
 #include "session/RoundService.h"
 #include "api/HttpServer.h"
 #include "api/SessionController.h"
 #include "api/GameController.h"
+#include "api/BalanceController.h"
 #include <filesystem>
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
@@ -32,13 +34,15 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
 
         InMemorySessionRepository sessionRepo;
         InMemoryRoundRepository roundRepo;
+        InMemoryTransactionRepository txRepo;
         DummyAggregatorClient aggregator;
         SessionManager sessionManager(sessionRepo);
-        RoundService roundService(math, roundRepo, sessionManager, aggregator);
+        RoundService roundService(math, roundRepo, txRepo, sessionManager, aggregator);
 
         HttpServer server;
         SessionController sessionController(sessionManager, aggregator, roundService);
         GameController gameController(roundService, sessionManager);
+        BalanceController balanceController(sessionManager, aggregator);
 
         server.RegisterHandler("/session/start",
             [&sessionController](const std::string& body) {
@@ -60,6 +64,11 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
         server.RegisterHandler("/game/finish",
             [&gameController](const std::string& body) {
                 return gameController.Finish(body);
+            });
+
+        server.RegisterHandler("/balance",
+            [&balanceController](const std::string& body) {
+                return balanceController.GetBalance(body);
             });
 
         server.Start(8080);

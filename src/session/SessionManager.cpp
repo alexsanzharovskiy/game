@@ -6,11 +6,13 @@ SessionManager::SessionManager(SessionRepository& repo)
 Session SessionManager::StartSession(const std::string& token,
                                      const std::string& playerId,
                                      const std::string& externalSessionId,
+                                     std::int64_t operatorId,
                                      double initialBalance) {
     Session s;
     s.token = token;
     s.playerId = playerId;
     s.externalSessionId = externalSessionId;
+    s.operatorId = operatorId;
     s.balance = initialBalance;
     s.isActive = true;
     return repo_.Create(s);
@@ -22,6 +24,11 @@ std::optional<Session> SessionManager::GetSession(std::uint64_t internalId) {
 
 std::optional<Session> SessionManager::GetByExternalSessionId(const std::string& externalId) {
     return repo_.FindByExternalId(externalId);
+}
+
+std::optional<Session> SessionManager::GetActiveByPlayerAndOperator(const std::string& playerId,
+                                                                    std::int64_t operatorId) {
+    return repo_.FindActiveByPlayerAndOperator(playerId, operatorId);
 }
 
 void SessionManager::UpdateBalance(std::uint64_t internalId, double newBalance) {

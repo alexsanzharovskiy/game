@@ -32,11 +32,13 @@ std::optional<RoundResult> InMemoryRoundRepository::FindUnfinishedBySession(std:
 }
 
 // 🔥 новое: ищем незавершённый раунд по player_id
-std::optional<RoundResult> InMemoryRoundRepository::FindUnfinishedByPlayer(const std::string& playerId) {
+std::optional<RoundResult> InMemoryRoundRepository::FindUnfinishedByPlayer(const std::string& playerId,
+                                                                          std::int64_t operatorId) {
     std::optional<RoundResult> candidate;
     // Условно берём "последний" по порядку вставки, но для in-memory это ок
     for (const auto& [id, round] : rounds_) {
         if (round.playerId == playerId &&
+            round.operatorId == operatorId &&
             round.status != RoundStatus::COMPLETED &&
             round.status != RoundStatus::CANCELLED) {
             candidate = round;

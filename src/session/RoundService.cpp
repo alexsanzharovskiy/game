@@ -4,16 +4,24 @@
 
 RoundService::RoundService(MathEngine& mathEngine,
                            RoundRepository& roundRepo,
+                           TransactionRepository& txRepo,
                            SessionManager& sessionManager,
                            IAggregatorClient& aggregator)
     : mathEngine_(mathEngine),
       roundRepo_(roundRepo),
+      txRepo_(txRepo),
       sessionManager_(sessionManager),
       aggregator_(aggregator) {}
 
 std::string RoundService::GenerateId(const std::string& prefix, std::uint64_t sessionId) {
     static std::uint64_t counter = 1;
     return prefix + "_" + std::to_string(sessionId) + "_" + std::to_string(counter++);
+}
+
+std::string RoundService::GenerateTransactionId(std::uint64_t sessionId, TransactionType type) {
+    std::string prefix = (type == TransactionType::BET) ? "bet" :
+                         (type == TransactionType::WIN) ? "win" : "cancel";
+    return GenerateId(prefix, sessionId);
 }
 
 // Шаг 1: /game/play
@@ -38,7 +46,18 @@ RoundResult RoundService::PlayRound(std::uint64_t sessionInternalId,
 
     // Генерируем идентификаторы
     std::string roundId = GenerateId("round", session.internalId);
-    std::string betTxId = GenerateId("bet", session.internalId);
+    std::string betTxId = GenerateTransactionId(session.internalId, TransactionType::BET);
+
+    Transaction betTx;
+    betTx.id        = betTxId;
+    betTx.type      = TransactionType::BET;
+    betTx.status    = TransactionStatus::PENDING;
+    betTx.amount    = betAmount;
+    betTx.roundId   = roundId;
+    betTx.sessionId = session.internalId;
+    betTx.playerId  = session.playerId;
+    betTx.operatorId= session.operatorId;
+    txRepo_.Save(betTx);
 
     // 1) BET (DEBIT) на агрегаторе
     DebitRequest dreq;
@@ -47,13 +66,20 @@ RoundResult RoundService::PlayRound(std::uint64_t sessionInternalId,
     dreq.amount    = betAmount;
     dreq.sessionId = session.externalSessionId;
     dreq.playerId  = session.playerId;
+    dreq.operatorId= session.operatorId;
 
     auto debitResp = aggregator_.Debit(dreq);
     if (!debitResp || debitResp->status != TxStatus::SUCCESS) {
+        betTx.status = TransactionStatus::FAILED;
+        betTx.externalError = debitResp ? debitResp->errorCode : "NO_RESPONSE";
+        txRepo_.Update(betTx);
         util::Logger::Warn("PlayRound: debit failed for round " + roundId);
         throw std::runtime_error("Failed to debit bet amount: " +
                                  (debitResp ? debitResp->errorCode : "NO_RESPONSE"));
     }
+
+    betTx.status = TransactionStatus::SUCCESS;
+    txRepo_.Update(betTx);
 
     // Обновляем баланс по ставке
     sessionManager_.UpdateBalance(session.internalId, debitResp->newBalance);
@@ -63,29 +89,62 @@ RoundResult RoundService::PlayRound(std::uint64_t sessionInternalId,
 
     RoundResult result;
     result.roundId   = roundId;
-    result.betTxId   = betTxId;
-    result.winTxId   = ""; // пока не было WIN
     result.sessionId = session.internalId;
+    result.operatorId= session.operatorId;
     result.playerId  = session.playerId;
     result.currency  = currency;
     result.reelsJson = reelsJson; // пока может быть пустой
     result.betAmount = betAmount;
     result.winAmount = winAmount;
-    result.status    = RoundStatus::BET_CONFIRMED; // BET прошёл, WIN ещё не делали
+    result.status    = RoundStatus::BET_FINISHED; // BET прошёл, WIN ещё не делали
+
+    // win транзакция создаётся в статусе CREATED (пока не отправляли)
+    Transaction winTx;
+    winTx.id        = GenerateTransactionId(session.internalId, TransactionType::WIN);
+    winTx.type      = TransactionType::WIN;
+    winTx.status    = TransactionStatus::CREATED;
+    winTx.amount    = winAmount;
+    winTx.roundId   = roundId;
+    winTx.sessionId = session.internalId;
+    winTx.playerId  = session.playerId;
+    winTx.operatorId= session.operatorId;
+    txRepo_.Save(winTx);
 
     roundRepo_.Save(result);
     sessionManager_.SetLastRound(session.internalId, result.roundId);
 
     util::Logger::Info("PlayRound: created round " + roundId +
                        " bet=" + std::to_string(betAmount) +
-                       " win=" + std::to_string(winAmount));
+                       " win=" + std::to_string(winAmount) +
+                       " operator=" + std::to_string(session.operatorId));
 
     // ВАЖНО: WIN ЕЩЁ НЕ ДЕЛАЛИ, баланс по win не изменён
     return result;
 }
 
 // Внутренняя общая логика для FinishRound и ResumeUnfinishedRound
-RoundResult RoundService::DoFinishRound(std::uint64_t sessionInternalId, RoundResult round) {
+Transaction RoundService::GetOrCreateWinTx(const RoundResult& round) {
+    auto txs = txRepo_.FindByRound(round.roundId);
+    for (const auto& tx : txs) {
+        if (tx.type == TransactionType::WIN) {
+            return tx;
+        }
+    }
+    Transaction winTx;
+    winTx.id        = GenerateTransactionId(round.sessionId, TransactionType::WIN);
+    winTx.type      = TransactionType::WIN;
+    winTx.status    = TransactionStatus::CREATED;
+    winTx.amount    = round.winAmount;
+    winTx.roundId   = round.roundId;
+    winTx.sessionId = round.sessionId;
+    winTx.playerId  = round.playerId;
+    winTx.operatorId= round.operatorId;
+    txRepo_.Save(winTx);
+    return winTx;
+}
+
+RoundResult RoundService::DoFinishRound(std::uint64_t sessionInternalId,
+                                        RoundResult round) {
     auto sessionOpt = sessionManager_.GetSession(sessionInternalId);
     if (!sessionOpt) {
         throw std::runtime_error("Session not found");
@@ -106,20 +165,32 @@ RoundResult RoundService::DoFinishRound(std::uint64_t sessionInternalId, RoundRe
         return round;
     }
 
-    // Нужен WIN: если ещё нет winTxId — генерируем
-    if (round.winTxId.empty()) {
-        round.winTxId = GenerateId("win", round.sessionId);
+    Transaction winTx = GetOrCreateWinTx(round);
+    if (winTx.status == TransactionStatus::SUCCESS) {
+        round.status = RoundStatus::COMPLETED;
+        roundRepo_.Update(round);
+        sessionManager_.ClearLastRound(session.internalId);
+        util::Logger::Info("DoFinishRound: round " + round.roundId + " already completed");
+        return round;
     }
+
+    winTx.status = TransactionStatus::PENDING;
+    txRepo_.Update(winTx);
 
     WinRequest wreq;
     wreq.roundId   = round.roundId;
-    wreq.winTxId   = round.winTxId;
-    wreq.amount    = round.winAmount;
+    wreq.winTxId   = winTx.id;
+    wreq.amount    = winTx.amount;
     wreq.sessionId = session.externalSessionId;
     wreq.playerId  = session.playerId;
+    wreq.operatorId= session.operatorId;
 
     auto winResp = aggregator_.Win(wreq);
     if (!winResp || winResp->status != TxStatus::SUCCESS) {
+        winTx.status = TransactionStatus::FAILED;
+        winTx.externalError = winResp ? winResp->errorCode : "NO_RESPONSE";
+        txRepo_.Update(winTx);
+
         round.status = RoundStatus::WIN_PENDING;
         roundRepo_.Update(round);
         util::Logger::Warn("DoFinishRound: WIN still pending for round " + round.roundId +
@@ -128,20 +199,26 @@ RoundResult RoundService::DoFinishRound(std::uint64_t sessionInternalId, RoundRe
     }
 
     // WIN успешен
+    winTx.status = TransactionStatus::SUCCESS;
+    txRepo_.Update(winTx);
+
     sessionManager_.UpdateBalance(session.internalId, winResp->newBalance);
     round.status = RoundStatus::COMPLETED;
     roundRepo_.Update(round);
     sessionManager_.ClearLastRound(session.internalId);
 
     util::Logger::Info("DoFinishRound: round " + round.roundId +
-                       " COMPLETED, win=" + std::to_string(round.winAmount) +
-                       ", new balance=" + std::to_string(winResp->newBalance));
+                       " WIN tx=" + winTx.id +
+                       " amount=" + std::to_string(winTx.amount) +
+                       ", new balance=" + std::to_string(winResp->newBalance) +
+                       " operator=" + std::to_string(session.operatorId));
     return round;
 }
 
 // Шаг 2: /game/finish
 RoundResult RoundService::FinishRound(const std::string& playerId,
-                                      const std::string& roundId) {
+                                      const std::string& roundId,
+                                      std::int64_t operatorId) {
     auto existing = roundRepo_.FindById(roundId);
     if (!existing) {
         throw std::runtime_error("Round not found");
@@ -152,6 +229,9 @@ RoundResult RoundService::FinishRound(const std::string& playerId,
     // Проверяем, что раунд реально принадлежит этому игроку
     if (round.playerId != playerId) {
         throw std::runtime_error("Round does not belong to this player");
+    }
+    if (round.operatorId != operatorId) {
+        throw std::runtime_error("Operator does not match");
     }
 
     // Если уже COMPLETED или CANCELLED — ничего делать не нужно
@@ -181,7 +261,7 @@ std::optional<RoundResult> RoundService::ResumeUnfinishedRound(std::uint64_t ses
     }
 }
 
-std::optional<RoundResult> RoundService::FindUnfinishedRoundForPlayer(const std::string& playerId) {
-    return roundRepo_.FindUnfinishedByPlayer(playerId);
+std::optional<RoundResult> RoundService::FindUnfinishedRoundForPlayer(const std::string& playerId,
+                                                                      std::int64_t operatorId) {
+    return roundRepo_.FindUnfinishedByPlayer(playerId, operatorId);
 }
-
